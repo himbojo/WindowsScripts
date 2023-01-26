@@ -1,4 +1,5 @@
-<#
+function Get-PortCertificate {
+    <#
     .SYNOPSIS
         Retrieves a certificate from a TLS/SSL port.
      
@@ -143,7 +144,7 @@
         Write-Output "$Separator`n$info`n$Separator"
         # Display the Data to the User
         Write-Output ($certificateInfo | Format-List | Out-String)
-        if( $VerbosePreference -ne 'SilentlyContinue') {
+        if ( $VerbosePreference -ne 'SilentlyContinue') {
             certutil.exe $FullPath
         }
             
@@ -152,3 +153,4 @@
         $base64 = [System.Convert]::ToBase64String($bytes)
         $base64 | Out-File -FilePath "$Path\${ComputerName}_${Port}.cer"
     }
+}
