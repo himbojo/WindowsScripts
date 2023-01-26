@@ -8,62 +8,100 @@ function Find-Program {
     the specified remote computer(s)
 
 .PARAMETER ComputerName
-    The remote computer(s) to check for programs on.
+    Hostname(s) or IP Address(es) of the target system.
+
+.PARAMETER ProgramName
+    Program you are looking for, will match on any substring and is case-insensitive
+
+.PARAMETER TimeOut
+    How long you are willing to wait for each computer to be checked, in seconds
 
 .PARAMETER Credential
-    The Credentials to use
+    Credentials to log into the machine
 
 .EXAMPLE
-    Find-Programs -ComputerName 'Server1', 'Server2'
+    PS> Find-Program -ComputerName "Server1"
 
 .EXAMPLE
-    Find-Programs -ComputerName 'Server1', 'Server2' -Credential (Get-Credential)
+    PS> "Server1","Server2" | Find-Program
 
 .INPUTS
-    String
+    System.String ComputerName
 
 .OUTPUTS
-    PSCustomObject
+    Array of PSCustomObject
 
 .NOTES
-    Author:  Jordan Akroyd
+        Filename:       Find-Program.ps1
+        Author:         https://github.com/himbojo
+        Modified date:  26-01-2023
+        Version:        1.0
+    
+    .LINK
+        https://github.com/himbojo/WindowsScripts
 #>
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory)]
-        [string[]]$ComputerName,
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true, Position = 0)]
+        [Alias('IPAddress', 'Server', 'Computer')]    
+        [string]$ComputerName,
+        [Parameter(Mandatory = $false, Position = 1)]
+        [Alias('Program', 'ProgramString', 'String')]    
+        [string]$ProgramName,
+        [Parameter(Mandatory = $false, Position = 2)]
+        [ValidateRange(1, 60)]
+        [int]$TimeOut = 3,
+        [Parameter(Mandatory = $false, Position = 3)]
         [System.Management.Automation.PSCredential]$Credential
     )
-    $Output = @()
-    $command = {
-        $ComputerName = $env:COMPUTERNAME
-        $RegistryUninstall = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
-        $RegistryObject = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine',$ComputerName)
-        $RegistryKey = $RegistryObject.OpenSubKey($RegistryUninstall)
-        $RegistryKeySubKeys=$RegistryKey.GetSubKeyNames()
-        $SubKeyArrayList = New-Object -TypeName "System.Collections.ArrayList"
-        foreach($key in $RegistryKeySubKeys){
-            $KeyPath=$RegistryUninstall+"\\"+$key
-            $SubKeyPath=$RegistryObject.OpenSubKey($KeyPath)
-            $DisplayName=$SubKeyPath.GetValue("DisplayName")
-            $UninstallString=$SubKeyPath.GetValue("UninstallString")
-            if($DisplayName){
-                $SubKeyCustomObject = New-Object System.Object
-                $SubKeyCustomObject | Add-Member -MemberType NoteProperty -Name "DisplayName" -Value $DisplayName
-                $SubKeyCustomObject | Add-Member -MemberType NoteProperty -Name "UninstallString" -Value $UninstallString
-                $SubKeyArrayList.Add($SubKeyCustomObject) | Out-Null
+    Begin {
+        $command = {
+            $ComputerName = $env:COMPUTERNAME
+            $RegistryUninstall = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
+            $RegistryObject = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine', $ComputerName)
+            $RegistryKey = $RegistryObject.OpenSubKey($RegistryUninstall)
+            $RegistryKeySubKeys = $RegistryKey.GetSubKeyNames()
+            $SubKeyArrayList = New-Object -TypeName "System.Collections.ArrayList"
+            foreach ($key in $RegistryKeySubKeys) {
+                $KeyPath = $RegistryUninstall + "\\" + $key
+                $SubKeyPath = $RegistryObject.OpenSubKey($KeyPath)
+                $DisplayName = $SubKeyPath.GetValue("DisplayName")
+                $UninstallString = $SubKeyPath.GetValue("UninstallString")
+                if ($DisplayName) {
+                    $SubKeyCustomObject = New-Object System.Object
+                    $SubKeyCustomObject | Add-Member -MemberType NoteProperty -Name "DisplayName" -Value $DisplayName
+                    $SubKeyCustomObject | Add-Member -MemberType NoteProperty -Name "UninstallString" -Value $UninstallString
+                    $SubKeyArrayList.Add($SubKeyCustomObject) | Out-Null
+                }
             }
-        }
-        $SubKeyArrayList
-    }
-    foreach($machine in $ComputerName){
-        if(!$Credential){
-            $Output += Invoke-Command -ComputerName $machine -ScriptBlock $command
-        } else {
-            $Output += Invoke-Command -ComputerName $machine -ScriptBlock $command -Credential $Credential
+            $SubKeyArrayList
         }
     }
-    $Output
+    Process {
+        $Separator = "`n$("=" * 50)`n"
+        Write-Output "$Separator$ComputerName$Separator"
+        $FQDN = @((Resolve-DnsName $ComputerName -Type A -QuickTimeout -ErrorAction SilentlyContinue).Name)[0]
+        if (!$FQDN) {
+            Write-Error "Could not resolve $ComputerName."
+            return
+        }
+        if (Test-WSMan -ComputerName $FQDN -ErrorAction Ignore) {
+            if (!$Credential) {
+                $remote = Invoke-Command -ComputerName $FQDN -ScriptBlock $command -AsJob
+                $Output = Wait-Job $remote -Timeout $TimeOut | Receive-Job | Select-Object -Property DisplayName, UninstallString
+            }
+            else {
+                $remote = Invoke-Command -ComputerName $FQDN -ScriptBlock $command -Credential $Credential -AsJob
+                $Output = Wait-Job $remote -Timeout $TimeOut | Receive-Job | Select-Object -Property DisplayName, UninstallString
+            }
+            if ($ProgramName) {
+                $Output = $Output | Where-Object -property DisplayName -Match $ProgramName
+            }
+            Write-Output $Output
+        }
+        else {
+            Write-Error "Couldn't connect to $ComputerName."
+        }
+        
+    }
 }
-Find-Program -ComputerName $MachinesC  | where-object -property DisplayName -match 'silver'
-
